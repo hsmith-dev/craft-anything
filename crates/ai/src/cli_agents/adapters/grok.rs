@@ -328,6 +328,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(root.join("inbox")).unwrap();
         std::fs::create_dir_all(&home).unwrap();
+        // The MCP server opens this as its project. A folder that already has files is not a
+        // project, and the server exits before `initialize`. Leave it absent so the server creates it.
         std::fs::write(root.join("readme.txt"), "live check\n").unwrap();
         // Ask, and no personal MCP servers. `ui.permission_mode` is what the CLI reads.
         std::fs::write(
@@ -370,7 +372,7 @@ mod tests {
         );
         // Deep build: Clean room is refused, because Grok's native reads never ask.
         spec.deep = true;
-        spec.builder = Some(super::super::Builder { investigation: Some(root.clone()), inbox: root.join("inbox") });
+        spec.builder = Some(super::super::Builder { investigation: Some(root.join("investigation.cany")), inbox: root.join("inbox") });
         let mut conv = super::super::builder_conversation(spec, approver);
         conv.send(
             "Do exactly these two things in this folder, then stop. First call the craft-anything MCP tool core_session_show and no other MCP server. Then run this shell command and no other command: mkdir grok-live-marker",
@@ -381,22 +383,31 @@ mod tests {
         let mut notes = Vec::new();
         let mut errors = Vec::new();
         let mut done = false;
-        let mut saw_server = false;
+        // The Craft Anything call, once `use_tool`'s `tool_name` names it. A mention in some
+        // other tool's input does not count, and a failed call does not either.
+        let mut craft_call: Option<String> = None;
+        let mut craft_ok = false;
+        let mut finishes = Vec::new();
         while started.elapsed() < std::time::Duration::from_secs(180) {
             for event in conv.poll() {
                 match event {
-                    crate::AgentEvent::ToolStarted { tool, input, .. } => {
-                        let blob = format!("{tool} {input}");
-                        let lower = blob.to_ascii_lowercase();
-                        if lower.contains("session_show") || lower.contains("craft-anything") || lower.contains("craft_anything") {
-                            saw_server = true;
+                    crate::AgentEvent::ToolStarted { call_id, tool, input, .. } => {
+                        if craft_call.is_none() && craft_anything_session_show(&input) {
+                            craft_call = Some(call_id);
                         }
-                        let mut note = blob.chars().take(160).collect::<String>();
+                        let mut note = format!("{tool} {input}").chars().take(160).collect::<String>();
                         note = note.replace(&user_home.display().to_string(), "~");
                         notes.push(note);
                         tools.push(tool);
                     }
-                    crate::AgentEvent::ToolFinished { tool, .. } => tools.push(tool),
+                    crate::AgentEvent::ToolFinished { call_id, tool, ok, summary, .. } => {
+                        if ok && craft_call.as_deref() == Some(call_id.as_str()) {
+                            craft_ok = true;
+                        }
+                        let summary: String = summary.chars().take(140).collect();
+                        finishes.push(format!("{ok} {tool} {summary}"));
+                        tools.push(tool);
+                    }
                     crate::AgentEvent::Error { message, .. } => errors.push(message),
                     crate::AgentEvent::TurnDone { .. } => done = true,
                     crate::AgentEvent::ConsentNeeded { call_id, tool, .. } => {
@@ -415,7 +426,26 @@ mod tests {
         let asked = permissions.lock().unwrap().clone();
         assert!(done, "the turn did not finish; tools={tools:?} permissions={asked:?} notes={notes:?} errors={errors:?}");
         assert!(!asked.is_empty(), "no permission was answered; tools={tools:?} notes={notes:?} errors={errors:?}");
-        assert!(saw_server, "craft-anything's tools did not run; tools={tools:?} permissions={asked:?} notes={notes:?} errors={errors:?}");
+        assert!(
+            craft_ok,
+            "craft-anything core_session_show did not finish successfully; call={craft_call:?} finishes={finishes:?} tools={tools:?} permissions={asked:?} notes={notes:?} errors={errors:?}"
+        );
+    }
+
+    /// Grok names an MCP call `server__tool` on `use_tool`'s `tool_name` field. A shell command
+    /// that merely mentions the server is not that call.
+    fn craft_anything_session_show(input: &serde_json::Value) -> bool {
+        let Some(name) = input.get("tool_name").and_then(serde_json::Value::as_str) else { return false };
+        let Some((server, tool)) = name.split_once("__") else { return false };
+        server == "craft-anything" && tool == "core_session_show"
+    }
+
+    #[test]
+    fn a_craft_anything_call_is_the_qualified_tool_name_only() {
+        assert!(craft_anything_session_show(&json!({"tool_name": "craft-anything__core_session_show", "tool_input": {}})));
+        assert!(!craft_anything_session_show(&json!({"command": "echo craft-anything core_session_show"})));
+        assert!(!craft_anything_session_show(&json!({"tool_name": "other__core_session_show"})));
+        assert!(!craft_anything_session_show(&json!("craft-anything__core_session_show")));
     }
 
     #[cfg(unix)]

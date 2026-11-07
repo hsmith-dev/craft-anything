@@ -571,8 +571,10 @@ Owner: open · Status: in progress
       starts), model and reasoning effort, and our MCP server on the session with `"type": "stdio"`
       only for Grok. Clean room, deep chat, and questions are refused, because Grok can read and
       edit without a permission request. Verified against Grok 1.0.77's ACP handshake and
-      `session/set_config_option` (the CLI `--model` flag does not stick after `session/new`). A
-      live deep build on 2026-11-06 (Grok 1.0.77) finished, called the Craft Anything server, and
+      `session/set_config_option` (the CLI `--model` flag does not stick after `session/new`;
+      discovery still returns the session's models when a saved model is rejected). A
+      live deep build on 2026-11-06 (Grok 1.0.77) finished, called
+      `craft-anything__core_session_show` through `use_tool` until that call succeeded, and
       answered one permission request. Clean room and deep chat were not run live; those runs
       are refused.
       See [Grok Build](grok.md).

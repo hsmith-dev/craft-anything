@@ -51,7 +51,10 @@ The CLI `--model` flag is visible while Grok starts, then `session/new` switches
 model saved in Grok. Craft Anything sets the chosen model again with `session/set_config_option`
 before the session is ready, and sets the reasoning effort after that, because a model change
 can reset it. The value on the wire is a string (`"grok-4.6"`, `"low"`), not a nested object.
-If the session already has that value, the call is skipped.
+If the session already has that value, the call is skipped. A build fails when Grok rejects
+the chosen model. Model-list discovery does not: it drops that one value and still returns
+the models the session listed, so Settings can offer another. The rejected value is not sent
+again. A model Grok accepts is still applied, and the thinking choices are read after that.
 
 ## Model and thinking
 
@@ -99,10 +102,11 @@ argument order, the `type: stdio` server payload, and the config queue are cover
 tests with a scripted agent.
 
 A live deep build was run on 2026-11-06 with Grok Build 1.0.77. The turn finished in about
-30 seconds. A tool call named the `craft-anything` server or `core_session_show`, and one
-permission request was answered with allow. That run used a temporary `GROK_HOME` whose
-`ui.permission_mode` was `ask`, and a symlink to the existing auth file. The file was not
-read, and the person's own Grok config was not changed. A config that approves every tool
-does not send that request. Copilot, Gemini, and Maki were not checked live with
+23 seconds. Grok called `craft-anything__core_session_show` through `use_tool`, and that
+call finished successfully. One permission request was answered with allow. The server was
+given its own empty investigation project: a folder that already has files makes it exit
+before `initialize`. That run used a temporary `GROK_HOME` whose `ui.permission_mode` was
+`ask`, and a symlink to the existing auth file. The file was not read, and the person's own
+Grok config was not changed. A config that approves every tool does not send that request. Copilot, Gemini, and Maki were not checked live with
 `"type": "stdio"`; the field is still sent only for Grok. Clean room and deep chat were
 not run live, because those runs are refused.

@@ -329,6 +329,14 @@ impl AcpCore {
                 let params = json!({"cwd": self.cwd, "mcpServers": self.mcp_servers()});
                 return vec![self.request("session/new", params, Pending::NewSession)];
             }
+            // Discovery sends no prompt. A rejected saved model must not hide the list
+            // `session/new` already returned. Drop that one value and continue. A prompt is
+            // still waiting below, so a build does not switch models on its own, and the
+            // rejected value is not sent again.
+            if kind == Pending::SetConfig && self.queued.is_empty() {
+                self.config_queue.pop_front();
+                return self.advance_config();
+            }
             self.failure = Some(TurnFailure::new(match err.get("code").and_then(Value::as_i64) {
                 Some(-32000) => FailureKind::Authentication,
                 Some(-32602..=-32600) => FailureKind::Configuration,
@@ -1450,6 +1458,28 @@ printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$prompt
         assert!(outs.contains(&Out::TurnEnded));
         assert!(!failed.ready);
         assert!(sent(&outs).is_empty(), "a failed override does not prompt");
+
+        // Nothing was asked: discovery keeps the session's list and goes on to the next override.
+        let mut discovery = core(None);
+        discovery.config_queue = VecDeque::from([("model".into(), "missing".into()), ("reasoning_effort".into(), "low".into())]);
+        discovery.start();
+        discovery.line(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#);
+        let rejected = sent(&discovery.line(&session_opened("grok-4.7", "high")));
+        assert_eq!(rejected[0]["params"]["configId"], "model");
+        let outs = discovery.line(r#"{"jsonrpc":"2.0","id":3,"error":{"code":-32602,"message":"unknown model"}}"#);
+        assert!(discovery.failure.is_none());
+        assert!(outs.iter().all(|out| !matches!(out, Out::Event(_) | Out::TurnEnded)));
+        let effort = sent(&outs);
+        assert_eq!(effort.len(), 1);
+        assert_eq!(effort[0]["params"], json!({"sessionId": "s-1", "configId": "reasoning_effort", "value": "low"}));
+        assert_eq!(discovery.models, ["grok-4.7", "grok-4.6"]);
+        assert_eq!(discovery.current_model, "grok-4.7");
+        assert!(!discovery.ready);
+        let done = sent(&discovery.line(&config_reply(4, "grok-4.7", "low")));
+        assert!(done.is_empty(), "discovery sends no prompt");
+        assert!(discovery.ready);
+        assert_eq!(discovery.models, ["grok-4.7", "grok-4.6"]);
+        assert_eq!(discovery.current_model, "grok-4.7");
     }
 
     #[test]
